@@ -1,0 +1,13 @@
+pip install PyQt5
+pip install functools
+pip install numpy
+pip install pandas
+pip install sqlite3
+pip install dfply
+pip install plotly
+pip install scipy
+pip install multiprocessing
+pip install pointpats
+pip install matplotlib
+pip install PyQtWebEngine
+pip install geopandas
