@@ -1,5 +1,5 @@
-# MagiminsCalculator
-A calculator to compute best ingredients combination for the Potionomics game.
+# GIC-Track
+This dashboard is designed for the spatial and temporal analysis of fluorescently tagged transcription factors within cell nuclei.
 
 # Installation Guide
 1. Download Python from https://www.python.org/ftp/python/3.10.5/python-3.10.5-amd64.exe.
