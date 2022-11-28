@@ -352,28 +352,8 @@ class Controller:
     def __init__(self, model, view):
         self._model = model
         self._view = view
-        self.trajectoryPlotted = False
         self._buttonResponse()
         self._loadExistingData()
-
-    def plotTrajectory(self, *args):
-        trajNumber = int(self._view.trajNumberBox.text())
-        jumpNumber = int(self._view.jumpNumberDrawBox.text())
-        trajLength = int(self._view.minTrajLength.text())
-        selectionFile = self._view.comboFileList.currentData()
-        if selectionFile == []:
-            selectionFile = [self._view.comboFileList.itemText(i) for i in range(self._view.comboFileList.count())]
-        data = self._model.getTrackFiles(selectionFile)
-        df = self._model.plotTrajectory_data(trajLength, trajNumber, jumpNumber, data)
-        
-        # if self._view.trajTabTrajGroupButton.isChecked():
-        #     figure = px.line(df, x = "x", y = "y", color = "trajID")
-        # elif self._view.trajTabSpeedGroupButton.isChecked():
-        #     1
-        figure = px.line(df, x = "x", y = "y", color = "trajID", labels = {"x": "X (\u03BCm)", "y": "Y (\u03BCm)"})
-        figure.layout.update(showlegend = False)
-        self._view.trajectory_browser.setHtml(figure.to_html(include_plotlyjs='cdn'))
-        self.trajectoryPlotted = True
 
     def uploadFileButton(self, fileType):
         files = QFileDialog.getOpenFileNames(self._view, "Choose File", os.getcwd())
@@ -474,12 +454,13 @@ class Controller:
                         os.system(MATLAB_To_Run + " -wait -nodesktop -nosplash -r \"run([pwd, '/SPT_LocAndTrack/fastSPT_JF549_TIFF_Diffusion.m']); exit(1)\"")
                     elif fileType == "post_files":
                         os.system(MATLAB_To_Run + " -wait -nodesktop -nosplash -r \"run([pwd, '/SPT_LocAndTrack/UploadExistingData.m']); exit(1)\"")
-            dataFile, dataTraj, dataTrack, dataJD, dataDwellTime = self._model.processUploadedFileToDatabase(file_names, acquisition_rate, exposureTime)
+            dataFile, dataTraj, dataTrack, dataJD, dataAngle, dataDwellTime = self._model.processUploadedFileToDatabase(file_names, acquisition_rate, exposureTime)
             with sqlite3.connect('database.db') as conn:
                 dataFile.to_sql('FileList', conn, if_exists="append")
                 dataTraj.to_sql('TrajectoryList', conn, if_exists="append")
                 dataTrack.to_sql('TrackList', conn, if_exists="append")
                 dataJD.to_sql('JDList', conn, if_exists="append")
+                dataAngle.to_sql('AngleList', conn, if_exists="append")
                 if len(dataDwellTime) > 0:
                     dataDwellTime.to_sql('DwellTimeData', conn, if_exists="append") # TODO: Make a new table for dwell time data
             self._loadExistingData()
@@ -506,6 +487,35 @@ class Controller:
         # do what with the data? self.bigData = data?
         # don't need this? when in each tab, check for the selected condition?
 
+    def plotTrajectory(self, *args):
+        trajNumber = int(self._view.trajNumberBox.text())
+        jumpNumber = int(self._view.jumpNumberDrawBox.text())
+        trajLength = int(self._view.minTrajLength.text())
+        selectionFile = self._view.comboFileList.currentData()
+        if selectionFile == []:
+            selectionFile = [self._view.comboFileList.itemText(i) for i in range(self._view.comboFileList.count())]
+        if len(selectionFile) > 1:
+            self._view.trajectory_browser.setHtml("")
+        else:
+            data = self._model.getTrackFiles(selectionFile)
+            df = self._model.plotTrajectory_data(trajLength, trajNumber, jumpNumber, data)
+
+            # if self._view.trajTabTrajGroupButton.isChecked():
+            #     figure = px.line(df, x = "x", y = "y", color = "trajID")
+            # elif self._view.trajTabSpeedGroupButton.isChecked():
+            #     1
+            figure = px.line(df, x = "x", y = "y", color = "trajID", labels = {"x": "X (\u03BCm)", "y": "Y (\u03BCm)"})
+            figure.layout.update(showlegend = False)
+            self._view.trajectory_browser.setHtml(figure.to_html(include_plotlyjs='cdn'))
+
+    def trajectoryData(self):
+        selectionFile = self._view.comboFileList.currentData()
+        if selectionFile == []:
+            selectionFile = [self._view.comboFileList.itemText(i) for i in range(self._view.comboFileList.count())]
+        data = self._model.getTrajectoryDataFiles(selectionFile)
+        boxData = data >> group_by(X.filename, X.mutation) >> summarize(TrajNumber = summary_functions.n_distinct(X.trajID))
+        boxFigure = px.box(boxData, y = "TrajNumber", color = "mutation", points = "all")
+        self._view.trajectoryNumberBox_browser.setHtml(boxFigure.to_html(include_plotlyjs='cdn'))
     def diffusionPlotUpdate(self):
         selectionFile = self._view.comboFileList.currentData()
         if selectionFile == []:
@@ -524,7 +534,7 @@ class Controller:
         plotData, pieData = self._model.produceDiffusionData(data, self._view.diffusionBinSize.value(), self._view.diffusionLowerLimit.value(), self._view.diffusionUpperLimit.value(), errorView, boundaryValue)       
         pieFigure = self._model.produceDiffusionPieFigures(pieData)
         if errorView == 0:
-            figure = px.line(plotData, x = "x", y = "y", error_y = "error", error_y_minus = "error_minus", color = "mutation", labels = {"mutation": "Condition", "x": "Log10(D(um^2/s))", "y": "Normalized Frequency"})
+            figure = px.line(plotData, x = "x", y = "y", error_y = "error", error_y_minus = "error_minus", color = "mutation", labels = {"x": "Log10(D(um^2/s))", "y": "Normalized Frequency"})
         else:
             figure = px.line(plotData, x = "x", y = "y", error_y = "error", color = "mutation", labels = {"x": "Log10(D(um^2/s))", "y": "Normalized Frequency"})
         boundaryLine = pd.DataFrame({"x": [boundaryValue, boundaryValue], "y": [0, max(plotData["y"] + plotData["error"])]})
@@ -543,6 +553,21 @@ class Controller:
             self._view.diffusionFraction3_browser.setHtml(pieFigure[2].to_html(include_plotlyjs='cdn'))
         else:
             self._view.diffusionFraction3_browser.setHtml("")
+
+    # def fractionExport(self):
+    #     selectionFile = self._view.comboFileList.currentData()
+    #     if selectionFile == []:
+    #         selectionFile = [self._view.comboFileList.itemText(i) for i in range(self._view.comboFileList.count())]
+    #     data = self._model.getAngleTrackFiles(selectionFile)
+    #     if self._view.boundaryComputation.currentText() == "Formula":
+    #         boundaryValue = -0.5
+    #     else:
+    #         boundaryValue = self._view.boundaryRawValue.value()
+    #     polarHist = self._model.produceAngleHist(data, self._view.diffusionLowerLimit.value(), self._view.diffusionUpperLimit.value(), boundaryValue) 
+    #     testData = pd.DataFrame({"name": [0, 1, 2, 3, 4, 5], "number": [5, 6, 5, 4, 3, 4]})
+    #     polarHist = px.bar_polar(testData, r = "number", theta = "name", color = "name")
+    #     self._view.diffusionFraction3_browser.setHtml(polarHist.to_html(include_plotlyjs='cdn'))
+    #     1
 
     def jumpDistancePlotUpdate(self):
         self._view.diffusionTrack2Par_browser.setHtml("")
@@ -576,8 +601,10 @@ class Controller:
             for n in range(len(list(set(data["mutation"])))):
                 # twoParFigure.add_trace(go.Scatter(data, x = "jump_distance", y = "twoParFrequency", color = "mutation", name = "test").data[n])
                 twoParFigure.add_trace(px.line(data, x = "jump_distance", y = "twoParFrequency", color = "mutation", color_discrete_sequence = ["#EF553B"]).data[n])
-                twoParFigure.add_trace(px.line(data, x = "jump_distance", y = "twoParD1Values", color = "mutation", line_dash = "mutation", line_dash_sequence = ["dot"], color_discrete_sequence = ["#00CC96"]).data[n])
-                twoParFigure.add_trace(px.line(data, x = "jump_distance", y = "twoParD2Values", color = "mutation", line_dash = "mutation", line_dash_sequence = ["dash"], color_discrete_sequence = ["#AB63FA"]).data[n])
+                # twoParFigure.add_trace(px.line(data, x = "jump_distance", y = "twoParD1Values", color = "mutation", line_dash = "mutation", line_dash_sequence = ["dot"], color_discrete_sequence = ["#00CC96"]).data[n])
+                # twoParFigure.add_trace(px.line(data, x = "jump_distance", y = "twoParD2Values", color = "mutation", line_dash = "mutation", line_dash_sequence = ["dash"], color_discrete_sequence = ["#AB63FA"]).data[n])
+                twoParFigure.add_trace(px.line(data, x = "jump_distance", y = "twoParD1Values", color = "mutation", color_discrete_sequence = ["#00CC96"]).data[n])
+                twoParFigure.add_trace(px.line(data, x = "jump_distance", y = "twoParD2Values", color = "mutation", color_discrete_sequence = ["#AB63FA"]).data[n])
             twoParFigure.update_xaxes(range = [0, self._view.jumpDistanceConsidered.value()])
             # twoParFigure.update_traces(name = "test", selector = dict(type="bar"))
             twoParFigure.update_traces(name = "Total", selector = dict(line_color="#EF553B"))
@@ -592,9 +619,12 @@ class Controller:
             threeParFigure = px.bar(data, x = "jump_distance", y = "sharedFrequency", color = "mutation", barmode = "group", labels = {"jump_distance": "Jump Distance (um)", "sharedFrequency": "Frequency"})
             for n in range(len(list(set(data["mutation"])))):
                 threeParFigure.add_trace(px.line(data, x = "jump_distance", y = "threeParFrequency", color = "mutation", color_discrete_sequence = ["#EF553B"]).data[n])
-                threeParFigure.add_trace(px.line(data, x = "jump_distance", y = "threeParD1Values", color = "mutation", line_dash = "mutation", line_dash_sequence = ["dot"], color_discrete_sequence = ["#00CC96"]).data[n])
-                threeParFigure.add_trace(px.line(data, x = "jump_distance", y = "threeParD2Values", color = "mutation", line_dash = "mutation", line_dash_sequence = ["dash"], color_discrete_sequence = ["#AB63FA"]).data[n])
-                threeParFigure.add_trace(px.line(data, x = "jump_distance", y = "threeParD3Values", color = "mutation", line_dash = "mutation", line_dash_sequence = ["longdashdot"], color_discrete_sequence = ["#FFA15A"]).data[n])
+                # threeParFigure.add_trace(px.line(data, x = "jump_distance", y = "threeParD1Values", color = "mutation", line_dash = "mutation", line_dash_sequence = ["dot"], color_discrete_sequence = ["#00CC96"]).data[n])
+                # threeParFigure.add_trace(px.line(data, x = "jump_distance", y = "threeParD2Values", color = "mutation", line_dash = "mutation", line_dash_sequence = ["dash"], color_discrete_sequence = ["#AB63FA"]).data[n])
+                # threeParFigure.add_trace(px.line(data, x = "jump_distance", y = "threeParD3Values", color = "mutation", line_dash = "mutation", line_dash_sequence = ["longdashdot"], color_discrete_sequence = ["#FFA15A"]).data[n])
+                threeParFigure.add_trace(px.line(data, x = "jump_distance", y = "threeParD1Values", color = "mutation", color_discrete_sequence = ["#00CC96"]).data[n])
+                threeParFigure.add_trace(px.line(data, x = "jump_distance", y = "threeParD2Values", color = "mutation", color_discrete_sequence = ["#AB63FA"]).data[n])
+                threeParFigure.add_trace(px.line(data, x = "jump_distance", y = "threeParD3Values", color = "mutation", color_discrete_sequence = ["#FFA15A"]).data[n])
             threeParFigure.update_xaxes(range = [0, self._view.jumpDistanceConsidered.value()])
             threeParFigure.update_traces(name = "Total", selector = dict(line_color="#EF553B"))
             threeParFigure.update_traces(name = "Diffusing", selector = dict(line_color="#00CC96"))
@@ -632,6 +662,28 @@ class Controller:
         twoParBoxData, threeParBoxData = self._model.getJumpDistanceBoxData(selectionFile)
         twoParBoxData.to_csv("Two_Parameter_Fit.csv")
         threeParBoxData.to_csv("Three_Parameter_Fit.csv")
+
+    def anglePlot(self):
+        selectionFile = self._view.comboFileList.currentData()
+        if selectionFile == []:
+            selectionFile = [self._view.comboFileList.itemText(i) for i in range(self._view.comboFileList.count())]
+        selectionAngle = self._view.angleSelection.currentData()
+        if selectionAngle == []:
+            selectionAngle = [self._view.angleSelection.itemText(i) for i in range(self._view.angleSelection.count())]
+        angleRatio = self._view.angleRatio
+        data = self._model.getAngleData(selectionFile)
+        boundaryValue = self._view.boundaryValueAngle.value()
+        mutHist, stateHist, boundHist, diffuHist, trendPlot, boxPlot = self._model.produceAnglePlots(data, boundaryValue, selectionAngle)
+        self._view.trackAngleMut_browser.setHtml(mutHist.to_html(include_plotlyjs='cdn'))
+        self._view.trackAngleState_browser.setHtml(stateHist.to_html(include_plotlyjs='cdn'))
+        self._view.trackAngleBound_browser.setHtml(boundHist.to_html(include_plotlyjs='cdn'))
+        self._view.trackAngleDiffu_browser.setHtml(diffuHist.to_html(include_plotlyjs='cdn'))
+        self._view.trackAngleBox_browser.setHtml(boxPlot.to_html(include_plotlyjs='cdn'))
+
+        # self._view.fig = trendPlot # TODO: Temporary fix by setting a figure to view scene so it can be captured by the url generator.
+        # url = QtCore.QUrl()
+        # url.setScheme(PlotlyApplication.scheme.decode())
+        # self._view.trackAngleBox_browser.load(url)       
 
     def dOTMapUpdate(self):
         selectionFile = self._view.comboFileList.currentData()
@@ -735,17 +787,22 @@ class Controller:
         tabIndex = self._view.tabs.currentIndex()
         # self._view.tabs.tabText(self._view.tabs.currentIndex()) <- use string instead of index?
         if tabIndex == 1:
-            self.plotTrajectory()
-        elif tabIndex ==2:
+            if self._view.trajectory_tab.currentIndex() == 0: # Trajectory Plot
+                self.plotTrajectory()
+            elif self._view.trajectory_tab.currentIndex() == 1: # Trajectory Data
+                self.trajectoryData()
+        elif tabIndex == 2:
             if self._view.diffusionTabs.currentIndex() == 0: # Diffusion Plot
                 self.diffusionPlotUpdate()
             elif self._view.diffusionTabs.currentIndex() == 1:
                 self.jumpDistancePlotUpdate()
-        elif tabIndex == 3: #4: # Distribution of Tracks
+        elif tabIndex == 3: # Angle
+            self.anglePlot()
+        elif tabIndex == 4: # Distribution of Tracks
             self.dOTMapUpdate()
-        elif tabIndex == 4: #5: # Heat map
+        elif tabIndex == 5: # Heat map
             self.heatMapUpdate()
-        elif tabIndex == 5: # Dwell time
+        elif tabIndex == 6: # Dwell time
             self.dwellTimeUpdate()
 
     def deleteFiles(self):
@@ -777,6 +834,7 @@ class Controller:
         self._view.comboMutation.model().dataChanged.connect(self.comboFileListUpdate)
         # self._view.comboFileList.model().dataChanged.connect(self.sidebarFileList)
         self._view.tabs.currentChanged.connect(self.tabsUpdate)
+        self._view.trajectory_tab.currentChanged.connect(self.tabsUpdate)
         self._view.diffusionTabs.currentChanged.connect(self.tabsUpdate)
         
         self._view.comboAcquisitionRate.model().dataChanged.connect(self.tabsUpdate)
@@ -789,6 +847,7 @@ class Controller:
         self._view.jumpNumberDrawBox.textChanged.connect(self.plotTrajectory)
         self._view.minTrajLength.textChanged.connect(self.plotTrajectory)
         self._view.jumpDistanceToCSV.clicked.connect(self.jumpDistanceDataSave)
+        # self._view.fractionExportButton.clicked.connect(self.fractionExport)
         # self._view.trajTabTrajGroupButton.clicked.connect(self.plotTrajectory)
 
         # Diffusion Plot Interactive
@@ -803,6 +862,9 @@ class Controller:
         
         # Track Diffusion Plot Interactive
         self._view.jumpDistanceConsidered.valueChanged.connect(self.jumpDistancePlotUpdate)
+
+        # Angle Plot Interactive
+        self._view.boundaryValueAngle.valueChanged.connect(self.anglePlot)
 
         # Distribution of Tracks Interactive
         self._view.dOTTrajChoiceMax.clicked.connect(self.dOTMapUpdate)
@@ -821,6 +883,7 @@ class Controller:
         self._view.comboAcquisitionRate.model().clear()
         self._view.comboMutation.model().clear()
         self._view.comboFileList.model().clear()
+        self._view.angleSelection.model().clear()
 
         # Get data from database
         with sqlite3.connect('database.db') as conn:
@@ -838,11 +901,32 @@ class Controller:
             self._view.comboMutation.addItems(mutation)
             filename = df['filename']
             self._view.comboFileList.addItems(filename)
+            angleList = pd.DataFrame({"0 - 10": "",
+                                      "10 - 20": "",
+                                      "20 - 30": "",
+                                      "30 - 40": "",
+                                      "40 - 50": "",
+                                      "50 - 60": "",
+                                      "60 - 70": "",
+                                      "70 - 80": "",
+                                      "80 - 90": "",
+                                      "90 - 100": "",
+                                      "100 - 110": "",
+                                      "110 - 120": "",
+                                      "120 - 130": "",
+                                      "130 - 140": "",
+                                      "140 - 150": "",
+                                      "150 - 160": "",
+                                      "160 - 170": "",
+                                      "170 - 180": ""},
+                                      index = [0])
+            self._view.angleSelection.addItems(angleList)
 
             # Clearing the names in the box
             self._view.comboAcquisitionRate.updateText()
             self._view.comboMutation.updateText()
             self._view.comboFileList.updateText()
+            self._view.angleSelection.updateText()
 
 class Model:
     def __init__(self):
@@ -929,17 +1013,42 @@ class Model:
                                         "threeParSSR": data["FitPar"][0, 14]
                                        }, index = [0]
                                )
-        if os.path.exists(dataDir + file_name + "_dwellTime.mat"):
-            data = scipy.io.loadmat(dataDir + file_name + "_dwellTime.mat")
-            dataDwellTime = pd.DataFrame(data = {"filename": file_name,
-                                                 "R1": data["dwellTimeData"][0][0], # TODO: Make a new table for dwell time data
-                                                 "R2": data["dwellTimeData"][0][1],
-                                                 "F": data["dwellTimeData"][0][2]
-                                                 }, index = [0]
-                                        )
+        data = scipy.io.loadmat(dataDir + file_name + "_dataAngle.mat")
+        dataAngle = pd.DataFrame(data = {"filename": file_name,
+                                         "trajID": [file_name + f"_{m}" for m in data['dataAngle'][:, 0].astype(int)],
+                                         "A1": [m for m in data['dataAngle'][:, 1].astype(int)],
+                                         "A2": [m for m in data['dataAngle'][:, 2].astype(int)],
+                                         "A3": [m for m in data['dataAngle'][:, 3].astype(int)],
+                                         "A4": [m for m in data['dataAngle'][:, 4].astype(int)],
+                                         "A5": [m for m in data['dataAngle'][:, 5].astype(int)],
+                                         "A6": [m for m in data['dataAngle'][:, 6].astype(int)],
+                                         "A7": [m for m in data['dataAngle'][:, 7].astype(int)],
+                                         "A8": [m for m in data['dataAngle'][:, 8].astype(int)],
+                                         "A9": [m for m in data['dataAngle'][:, 9].astype(int)],
+                                         "A10": [m for m in data['dataAngle'][:, 10].astype(int)],
+                                         "A11": [m for m in data['dataAngle'][:, 11].astype(int)],
+                                         "A12": [m for m in data['dataAngle'][:, 12].astype(int)],
+                                         "A13": [m for m in data['dataAngle'][:, 13].astype(int)],
+                                         "A14": [m for m in data['dataAngle'][:, 14].astype(int)],
+                                         "A15": [m for m in data['dataAngle'][:, 15].astype(int)],
+                                         "A16": [m for m in data['dataAngle'][:, 16].astype(int)],
+                                         "A17": [m for m in data['dataAngle'][:, 17].astype(int)],
+                                         "A18": [m for m in data['dataAngle'][:, 18].astype(int)]
+                                        })
+        if acquisition_rate == "fast":
+            return dataFile, dataTraj, dataTrack, dataJD, dataAngle
         else:
-            dataDwellTime = pd.DataFrame()
-        return dataFile, dataTraj, dataTrack, dataJD, dataDwellTime
+            if os.path.exists(dataDir + file_name + "_dwellTime.mat"):
+                data = scipy.io.loadmat(dataDir + file_name + "_dwellTime.mat")
+                dataDwellTime = pd.DataFrame(data = {"filename": file_name,
+                                                    "R1": data["dwellTimeData"][0][0], # TODO: Make a new table for dwell time data
+                                                    "R2": data["dwellTimeData"][0][1],
+                                                    "F": data["dwellTimeData"][0][2]
+                                                    }, index = [0]
+                                            )
+            else:
+                dataDwellTime = pd.DataFrame()
+            return dataFile, dataTraj, dataTrack, dataJD, dataAngle, dataDwellTime
 
     def processUploadedFileToDatabase(self, file_names, acquisition_rate, exposureTime):
         mpPool = mp.Pool(mp.cpu_count())
@@ -950,14 +1059,24 @@ class Model:
         dataTraj = pd.DataFrame(data = [])
         dataTrack = pd.DataFrame(data = [])
         dataJD = pd.DataFrame(data = [])
+        dataAngle = pd.DataFrame(data = [])
         dataDwellTime = pd.DataFrame(data = [])
-        for n in range(len(data)):
-            dataFile = pd.concat([dataFile, data[n][0]], axis = 0)
-            dataTraj = pd.concat([dataTraj, data[n][1]], axis = 0)
-            dataTrack = pd.concat([dataTrack, data[n][2]], axis = 0)
-            dataJD = pd.concat([dataJD, data[n][3]], axis = 0)
-            dataDwellTime = pd.concat([dataDwellTime, data[n][4]], axis = 0)
-        return dataFile, dataTraj, dataTrack, dataJD, dataDwellTime
+        if acquisition_rate == "fast":
+            for n in range(len(data)):
+                dataFile = pd.concat([dataFile, data[n][0]], axis = 0)
+                dataTraj = pd.concat([dataTraj, data[n][1]], axis = 0)
+                dataTrack = pd.concat([dataTrack, data[n][2]], axis = 0)
+                dataJD = pd.concat([dataJD, data[n][3]], axis = 0)
+                dataAngle = pd.concat([dataAngle, data[n][4]], axis = 0)
+        else:
+            for n in range(len(data)):
+                dataFile = pd.concat([dataFile, data[n][0]], axis = 0)
+                dataTraj = pd.concat([dataTraj, data[n][1]], axis = 0)
+                dataTrack = pd.concat([dataTrack, data[n][2]], axis = 0)
+                dataJD = pd.concat([dataJD, data[n][3]], axis = 0)
+                dataAngle = pd.concat([dataAngle, data[n][4]], axis = 0)
+                dataDwellTime = pd.concat([dataDwellTime, data[n][5]], axis = 0)
+        return dataFile, dataTraj, dataTrack, dataJD, dataAngle, dataDwellTime
 
     def updateMutationFilelist(self, selectionRate):
         if selectionRate == []:
@@ -1119,6 +1238,239 @@ class Model:
                 data = pd.read_sql_query(f"select FileList.filename, FileList.mutation, TrajectoryList.traj_length, TrajectoryList.msd, TrajectoryList.D from FileList INNER JOIN TrajectoryList ON FileList.filename = TrajectoryList.filename WHERE FileList.filename = :selectionFile", conn, params = {"selectionFile": selectionFile[0]})
         return data
 
+    def getTrajectoryDataFiles(self, selectionFile):
+        with sqlite3.connect('database.db') as conn:
+            if len(selectionFile) > 1:
+                data = pd.read_sql_query(f"select FileList.filename, FileList.mutation, TrajectoryList.trajID, TrajectoryList.traj_length from FileList INNER JOIN TrajectoryList ON FileList.filename = TrajectoryList.filename WHERE FileList.filename IN {tuple(selectionFile)}", conn)
+            else:
+                data = pd.read_sql_query(f"select FileList.filename, FileList.mutation, TrajectoryList.trajID, TrajectoryList.traj_length from FileList INNER JOIN TrajectoryList ON FileList.filename = TrajectoryList.filename WHERE FileList.filename = :selectionFile", conn, params = {"selectionFile": selectionFile[0]})
+        return data
+
+    def getAngleTrackFiles(self, selectionFile):
+        with sqlite3.connect('database.db') as conn:
+            if len(selectionFile) > 1:
+                data = pd.read_sql_query(f"select FileList.filename, FileList.mutation, TrajectoryList.trajID, TrajectoryList.traj_length, TrajectoryList.D, TrackList.Frame, TrackList.x, TrackList.y from FileList INNER JOIN TrajectoryList ON FileList.filename = TrajectoryList.filename INNER JOIN TrackList ON TrajectoryList.trajID = TrackList.trajID WHERE FileList.filename IN {tuple(selectionFile)}", conn)
+            else:
+                data = pd.read_sql_query(f"select FileList.filename, FileList.mutation, TrajectoryList.trajID, TrajectoryList.traj_length, TrajectoryList.D, TrackList.Frame, TrackList.x, TrackList.y from FileList INNER JOIN TrajectoryList ON FileList.filename = TrajectoryList.filename INNER JOIN TrackList ON TrajectoryList.trajID = TrackList.trajID WHERE FileList.filename = :selectionFile", conn, params = {"selectionFile": selectionFile[0]})
+        return data
+
+    def produceAnglePlots(self, data, boundaryValue, selectionAngle):
+        mutData = data >> group_by(X.mutation) >> summarize(A1 = X.A1.sum() / summary_functions.n_distinct(X.filename),
+                                                            A2 = X.A2.sum() / summary_functions.n_distinct(X.filename),
+                                                            A3 = X.A3.sum() / summary_functions.n_distinct(X.filename),
+                                                            A4 = X.A4.sum() / summary_functions.n_distinct(X.filename),
+                                                            A5 = X.A5.sum() / summary_functions.n_distinct(X.filename),
+                                                            A6 = X.A6.sum() / summary_functions.n_distinct(X.filename),
+                                                            A7 = X.A7.sum() / summary_functions.n_distinct(X.filename),
+                                                            A8 = X.A8.sum() / summary_functions.n_distinct(X.filename),
+                                                            A9 = X.A9.sum() / summary_functions.n_distinct(X.filename),
+                                                            A10 = X.A10.sum() / summary_functions.n_distinct(X.filename),
+                                                            A11 = X.A11.sum() / summary_functions.n_distinct(X.filename),
+                                                            A12 = X.A12.sum() / summary_functions.n_distinct(X.filename),
+                                                            A13 = X.A13.sum() / summary_functions.n_distinct(X.filename),
+                                                            A14 = X.A14.sum() / summary_functions.n_distinct(X.filename),
+                                                            A15 = X.A15.sum() / summary_functions.n_distinct(X.filename),
+                                                            A16 = X.A16.sum() / summary_functions.n_distinct(X.filename),
+                                                            A17 = X.A17.sum() / summary_functions.n_distinct(X.filename),
+                                                            A18 = X.A18.sum() / summary_functions.n_distinct(X.filename)
+                                                           )
+        mutData = mutData.rename(columns = {"A1": "0 - 10",
+                                            "A2": "10 - 20",
+                                            "A3": "20 - 30",
+                                            "A4": "30 - 40",
+                                            "A5": "40 - 50",
+                                            "A6": "50 - 60",
+                                            "A7": "60 - 70",
+                                            "A8": "70 - 80",
+                                            "A9": "80 - 90",
+                                            "A10": "90 - 100",
+                                            "A11": "100 - 110",
+                                            "A12": "110 - 120",
+                                            "A13": "120 - 130",
+                                            "A14": "130 - 140",
+                                            "A15": "140 - 150",
+                                            "A16": "150 - 160",
+                                            "A17": "160 - 170",
+                                            "A18": "170 - 180"})
+        mutData["Base"] = 0
+        mutData.loc[:, 1:19] = mutData.iloc[:, 1:19].divide(mutData.sum(1, numeric_only = True), axis = 0)
+        mutData = mutData.melt(id_vars = ["mutation", "Base"], var_name = "Theta", value_name = "Counts")
+        mutHist = px.bar_polar(mutData, r = "Counts", theta = "Theta", color = "mutation", base = "Base", start_angle = 0, direction = "counterclockwise", title = "Condition")
+        mutHist.update_traces(opacity = 0.6)
+
+        boundData = data.loc[data.D <= boundaryValue,]
+        diffuData = data.loc[data.D > boundaryValue,]
+        boundTData = boundData >> summarize(A1 = X.A1.sum() / summary_functions.n_distinct(X.filename),
+                                            A2 = X.A2.sum() / summary_functions.n_distinct(X.filename),
+                                            A3 = X.A3.sum() / summary_functions.n_distinct(X.filename),
+                                            A4 = X.A4.sum() / summary_functions.n_distinct(X.filename),
+                                            A5 = X.A5.sum() / summary_functions.n_distinct(X.filename),
+                                            A6 = X.A6.sum() / summary_functions.n_distinct(X.filename),
+                                            A7 = X.A7.sum() / summary_functions.n_distinct(X.filename),
+                                            A8 = X.A8.sum() / summary_functions.n_distinct(X.filename),
+                                            A9 = X.A9.sum() / summary_functions.n_distinct(X.filename),
+                                            A10 = X.A10.sum() / summary_functions.n_distinct(X.filename),
+                                            A11 = X.A11.sum() / summary_functions.n_distinct(X.filename),
+                                            A12 = X.A12.sum() / summary_functions.n_distinct(X.filename),
+                                            A13 = X.A13.sum() / summary_functions.n_distinct(X.filename),
+                                            A14 = X.A14.sum() / summary_functions.n_distinct(X.filename),
+                                            A15 = X.A15.sum() / summary_functions.n_distinct(X.filename),
+                                            A16 = X.A16.sum() / summary_functions.n_distinct(X.filename),
+                                            A17 = X.A17.sum() / summary_functions.n_distinct(X.filename),
+                                            A18 = X.A18.sum() / summary_functions.n_distinct(X.filename)
+                                           )
+        diffuTData = diffuData >> summarize(A1 = X.A1.sum() / summary_functions.n_distinct(X.filename),
+                                            A2 = X.A2.sum() / summary_functions.n_distinct(X.filename),
+                                            A3 = X.A3.sum() / summary_functions.n_distinct(X.filename),
+                                            A4 = X.A4.sum() / summary_functions.n_distinct(X.filename),
+                                            A5 = X.A5.sum() / summary_functions.n_distinct(X.filename),
+                                            A6 = X.A6.sum() / summary_functions.n_distinct(X.filename),
+                                            A7 = X.A7.sum() / summary_functions.n_distinct(X.filename),
+                                            A8 = X.A8.sum() / summary_functions.n_distinct(X.filename),
+                                            A9 = X.A9.sum() / summary_functions.n_distinct(X.filename),
+                                            A10 = X.A10.sum() / summary_functions.n_distinct(X.filename),
+                                            A11 = X.A11.sum() / summary_functions.n_distinct(X.filename),
+                                            A12 = X.A12.sum() / summary_functions.n_distinct(X.filename),
+                                            A13 = X.A13.sum() / summary_functions.n_distinct(X.filename),
+                                            A14 = X.A14.sum() / summary_functions.n_distinct(X.filename),
+                                            A15 = X.A15.sum() / summary_functions.n_distinct(X.filename),
+                                            A16 = X.A16.sum() / summary_functions.n_distinct(X.filename),
+                                            A17 = X.A17.sum() / summary_functions.n_distinct(X.filename),
+                                            A18 = X.A18.sum() / summary_functions.n_distinct(X.filename)
+                                           )
+        boundTData["State"] = "Bound"
+        boundTData["Base"] = 0
+        diffuTData["State"] = "Diffusing"
+        diffuTData["Base"] = 0
+        stateData = pd.concat([boundTData, diffuTData]) # boundData.append(diffuData)
+        stateData = stateData.rename(columns = {"A1": "0 - 10",
+                                                "A2": "10 - 20",
+                                                "A3": "20 - 30",
+                                                "A4": "30 - 40",
+                                                "A5": "40 - 50",
+                                                "A6": "50 - 60",
+                                                "A7": "60 - 70",
+                                                "A8": "70 - 80",
+                                                "A9": "80 - 90",
+                                                "A10": "90 - 100",
+                                                "A11": "100 - 110",
+                                                "A12": "110 - 120",
+                                                "A13": "120 - 130",
+                                                "A14": "130 - 140",
+                                                "A15": "140 - 150",
+                                                "A16": "150 - 160",
+                                                "A17": "160 - 170",
+                                                "A18": "170 - 180"})
+        stateData.loc[:, 0:18] = stateData.iloc[:, 0:18].divide(stateData.sum(1, numeric_only = True), axis = 0)
+        stateData = stateData.melt(id_vars = ["State", "Base"], var_name = "Theta", value_name = "Counts")
+        stateHist = px.bar_polar(stateData, r = "Counts", theta = "Theta", color = "State", base = "Base", start_angle = 0, direction = "counterclockwise", title = "State")
+        stateHist.update_traces(opacity = 0.6)
+
+        boundData = boundData >> group_by(X.mutation) >> summarize(A1 = X.A1.sum() / summary_functions.n_distinct(X.filename),
+                                                                   A2 = X.A2.sum() / summary_functions.n_distinct(X.filename),
+                                                                   A3 = X.A3.sum() / summary_functions.n_distinct(X.filename),
+                                                                   A4 = X.A4.sum() / summary_functions.n_distinct(X.filename),
+                                                                   A5 = X.A5.sum() / summary_functions.n_distinct(X.filename),
+                                                                   A6 = X.A6.sum() / summary_functions.n_distinct(X.filename),
+                                                                   A7 = X.A7.sum() / summary_functions.n_distinct(X.filename),
+                                                                   A8 = X.A8.sum() / summary_functions.n_distinct(X.filename),
+                                                                   A9 = X.A9.sum() / summary_functions.n_distinct(X.filename),
+                                                                   A10 = X.A10.sum() / summary_functions.n_distinct(X.filename),
+                                                                   A11 = X.A11.sum() / summary_functions.n_distinct(X.filename),
+                                                                   A12 = X.A12.sum() / summary_functions.n_distinct(X.filename),
+                                                                   A13 = X.A13.sum() / summary_functions.n_distinct(X.filename),
+                                                                   A14 = X.A14.sum() / summary_functions.n_distinct(X.filename),
+                                                                   A15 = X.A15.sum() / summary_functions.n_distinct(X.filename),
+                                                                   A16 = X.A16.sum() / summary_functions.n_distinct(X.filename),
+                                                                   A17 = X.A17.sum() / summary_functions.n_distinct(X.filename),
+                                                                   A18 = X.A18.sum() / summary_functions.n_distinct(X.filename)
+                                                                  )
+        diffuData = diffuData >> group_by(X.mutation) >> summarize(A1 = X.A1.sum() / summary_functions.n_distinct(X.filename),
+                                                                   A2 = X.A2.sum() / summary_functions.n_distinct(X.filename),
+                                                                   A3 = X.A3.sum() / summary_functions.n_distinct(X.filename),
+                                                                   A4 = X.A4.sum() / summary_functions.n_distinct(X.filename),
+                                                                   A5 = X.A5.sum() / summary_functions.n_distinct(X.filename),
+                                                                   A6 = X.A6.sum() / summary_functions.n_distinct(X.filename),
+                                                                   A7 = X.A7.sum() / summary_functions.n_distinct(X.filename),
+                                                                   A8 = X.A8.sum() / summary_functions.n_distinct(X.filename),
+                                                                   A9 = X.A9.sum() / summary_functions.n_distinct(X.filename),
+                                                                   A10 = X.A10.sum() / summary_functions.n_distinct(X.filename),
+                                                                   A11 = X.A11.sum() / summary_functions.n_distinct(X.filename),
+                                                                   A12 = X.A12.sum() / summary_functions.n_distinct(X.filename),
+                                                                   A13 = X.A13.sum() / summary_functions.n_distinct(X.filename),
+                                                                   A14 = X.A14.sum() / summary_functions.n_distinct(X.filename),
+                                                                   A15 = X.A15.sum() / summary_functions.n_distinct(X.filename),
+                                                                   A16 = X.A16.sum() / summary_functions.n_distinct(X.filename),
+                                                                   A17 = X.A17.sum() / summary_functions.n_distinct(X.filename),
+                                                                   A18 = X.A18.sum() / summary_functions.n_distinct(X.filename)
+                                                                  )
+        boundData = boundData.rename(columns = {"A1": "0 - 10",
+                                                "A2": "10 - 20",
+                                                "A3": "20 - 30",
+                                                "A4": "30 - 40",
+                                                "A5": "40 - 50",
+                                                "A6": "50 - 60",
+                                                "A7": "60 - 70",
+                                                "A8": "70 - 80",
+                                                "A9": "80 - 90",
+                                                "A10": "90 - 100",
+                                                "A11": "100 - 110",
+                                                "A12": "110 - 120",
+                                                "A13": "120 - 130",
+                                                "A14": "130 - 140",
+                                                "A15": "140 - 150",
+                                                "A16": "150 - 160",
+                                                "A17": "160 - 170",
+                                                "A18": "170 - 180"})
+        boundData["Base"] = 0
+        boundData.loc[:, 1:19] = boundData.iloc[:, 1:19].divide(boundData.sum(1, numeric_only = True), axis = 0)
+        boundData = boundData.melt(id_vars = ["mutation", "Base"], var_name = "Theta", value_name = "Counts")
+        boundHist = px.bar_polar(boundData, r = "Counts", theta = "Theta", color = "mutation", base = "Base", start_angle = 0, direction = "counterclockwise", title = "Bound")
+        boundHist.update_traces(opacity = 0.6)
+
+        diffuData = diffuData.rename(columns = {"A1": "0 - 10",
+                                                "A2": "10 - 20",
+                                                "A3": "20 - 30",
+                                                "A4": "30 - 40",
+                                                "A5": "40 - 50",
+                                                "A6": "50 - 60",
+                                                "A7": "60 - 70",
+                                                "A8": "70 - 80",
+                                                "A9": "80 - 90",
+                                                "A10": "90 - 100",
+                                                "A11": "100 - 110",
+                                                "A12": "110 - 120",
+                                                "A13": "120 - 130",
+                                                "A14": "130 - 140",
+                                                "A15": "140 - 150",
+                                                "A16": "150 - 160",
+                                                "A17": "160 - 170",
+                                                "A18": "170 - 180"})
+        diffuData["Base"] = 0
+        diffuData.loc[:, 1:19] = diffuData.iloc[:, 1:19].divide(diffuData.sum(1, numeric_only = True), axis = 0)
+        diffuData = diffuData.melt(id_vars = ["mutation", "Base"], var_name = "Theta", value_name = "Counts")
+        diffuHist = px.bar_polar(diffuData, r = "Counts", theta = "Theta", color = "mutation", base = "Base", start_angle = 0, direction = "counterclockwise", title = "Diffusing")
+        diffuHist.update_traces(opacity = 0.6)
+
+        data["Ratio"] = np.log2((data["A1"] + data["A2"] + data["A3"]).div(data["A16"] + data["A17"] + data["A18"]))
+        trendPlot = px.scatter(data, x = "D", y = "Ratio", color = "mutation", labels = {"Ratio": "Asymmetry Coefficient", "D": "Log10(D(um^2/s))"})
+        trendPlot.update_traces(opacity = 0.6)
+
+        dataSubset = data.loc[data.loc[:, 'D'] <= boundaryValue, ]
+        forwardBound = dataSubset.loc[dataSubset.loc[:, "Ratio"] > 0,]
+        backwardBound = dataSubset.loc[dataSubset.loc[:, "Ratio"] < 0,]
+        dataSubset = data.loc[data.loc[:, 'D'] > boundaryValue, ]
+        forwardDiffu = dataSubset.loc[dataSubset.loc[:, "Ratio"] > 0,]
+        backwardDiffu = dataSubset.loc[dataSubset.loc[:, "Ratio"] < 0,]
+
+        forwardBound["State"] = "Forward Bound"
+        backwardBound["State"] = "Backward Bound"
+        forwardDiffu["State"] = "Forward Diffusing"
+        backwardDiffu["State"] = "Backward Diffusing"
+        boxData = pd.concat([forwardBound, backwardBound, forwardDiffu, backwardDiffu])
+        boxPlot = px.box(boxData, x = "State", y = "Ratio", color = "mutation", points = "all", labels = {"Ratio": "Asymmetry Ratio"}) 
+        return mutHist, stateHist, boundHist, diffuHist, trendPlot, boxPlot
+
     def getJumpDistanceData(self, selectionFile):
         with sqlite3.connect('database.db') as conn:
             if len(selectionFile) > 1:
@@ -1151,6 +1503,14 @@ class Model:
             twoParBoxData = pd.concat([twoParBoxData, twoParTemp], axis = 0)
             threeParBoxData = pd.concat([threeParBoxData, threeParTemp], axis = 0)
         return twoParBoxData, threeParBoxData
+
+    def getAngleData(self, selectionFile):
+        with sqlite3.connect('database.db') as conn:
+            if len(selectionFile) > 1:
+                data = pd.read_sql_query(f"select FileList.filename, FileList.mutation, TrajectoryList.trajID, TrajectoryList.D, TrajectoryList.traj_length, AngleList.A1, AngleList.A2, AngleList.A3, AngleList.A4, AngleList.A5, AngleList.A6, AngleList.A7, AngleList.A8, AngleList.A9, AngleList.A10, AngleList.A11, AngleList.A12, AngleList.A13, AngleList.A14, AngleList.A15, AngleList.A16, AngleList.A17, AngleList.A18 from FileList INNER JOIN TrajectoryList ON FileList.filename = TrajectoryList.filename INNER JOIN AngleList ON TrajectoryList.trajID = AngleList.trajID WHERE FileList.filename IN {tuple(selectionFile)}", conn)
+            else:
+                data = pd.read_sql_query(f"select FileList.filename, FileList.mutation, TrajectoryList.trajID, TrajectoryList.D, TrajectoryList.traj_length, AngleList.A1, AngleList.A2, AngleList.A3, AngleList.A4, AngleList.A5, AngleList.A6, AngleList.A7, AngleList.A8, AngleList.A9, AngleList.A10, AngleList.A11, AngleList.A12, AngleList.A13, AngleList.A14, AngleList.A15, AngleList.A16, AngleList.A17, AngleList.A18  from FileList INNER JOIN TrajectoryList ON FileList.filename = TrajectoryList.filename INNER JOIN AngleList ON TrajectoryList.trajID = AngleList.trajID WHERE FileList.filename = :selectionFile", conn, params = {"selectionFile": selectionFile[0]})
+        return data
 
     def getDOTFiles(self, selectionFile):
         with sqlite3.connect('database.db') as conn:
@@ -1397,8 +1757,9 @@ class WidgetGallery(QDialog):
         # Create tabs
         self.tabs = QTabWidget()
         self.home_tab = QWidget()
-        self.trajectory_tab = QWidget()
+        self.trajectory_tab = QTabWidget()
         self.diffusionTabs = QTabWidget()
+        self.trackAngleTab = QTabWidget()
         self.trajectoryCharacteristicsTabs = QTabWidget()
         self.distributionOfTrackTab = QTabWidget()
         self.heatMapTab = QTabWidget()
@@ -1409,6 +1770,7 @@ class WidgetGallery(QDialog):
         self.tabs.addTab(self.home_tab, "&Home")
         self.tabs.addTab(self.trajectory_tab, "&Trajectory")
         self.tabs.addTab(self.diffusionTabs, "&Diffusion Plots")
+        self.tabs.addTab(self.trackAngleTab, "&Angle Plots")
         ## TODO:
         #self.tabs.addTab(self.trajectoryCharacteristicsTabs, "Tra&jectory Characteristics")
         self.tabs.addTab(self.distributionOfTrackTab, "D&istribution of Tracks")
@@ -1444,6 +1806,32 @@ class WidgetGallery(QDialog):
         gicText.setText("This dashboard was built by the Genome Imaging Centre, a Core Research Facility of the Centenary Institute.")
         gicText.setFont(QFont("Arial", 12))
         gicText.setWordWrap(True)
+        citaLabel = QLabel()
+        citaLabel.setText("Citation")
+        citaLabel.setFont(QFont("Arial", 16))
+        citaText = QLabel()
+        citaText.setText("Previously published algorithms, analysis, and scripts that are utilized in the dashboard can be found below: \n" +
+                          "\n" +
+                          "Localization and Tracking: \n" +
+                          "D. M. McSwiggen et al. (2019) Evidence for DNA-mediated nuclear compartmentalization distinct from phase separation. eLife. 8:e47098. \n" +
+                          "A. Sergé et al. (2008) Dynamic multiple-target tracing to probe spatiotemporal cartography of cell membranes. Nature methods, 5(8):687. \n" +
+                          "\n" +
+                          "MSD-Based Diffusion Plot: \n" +
+                          "J. Chen et al. (2014) Single-molecule dynamics of enhanceosome assembly in embryonic stem cells. Cell. 156(6):1274 - 1285. \n" +
+                          "Jump Distance Plot: \n" +
+                          "D. Mazza et al. (2013) Monitoring dynamic binding of chromatin proteins in vivo by single-molecule tracking. Methods Mol Biol. 1042:117-37. \n" +
+                          "\n" +
+                          "Angle Plots: \n" +
+                          "I. Izeddin et. al. (2014), Single-molecule tracking in live cells reveals distinct target-search strategies of transcription factors in the nucleus. eLife. 3:e02230. \n" +
+                          "\n" +
+                          "Heat Map: \n" +
+                          "J. O. Andrews et al. (2018) qSR: a quantitative super-resolution analysis tool reveals the cell-cycle dependent organization of RNA Polymerase I in live human cells. Sci Rep. 7424 (2018). +\n" +
+                          "\n" +
+                          "Dwell Time: \n" +
+                          "A.J. McCann et al. (2021) A dominant-negative SOX18 mutant disrupts multiple regulatory layers essential to transcription factor activity. Nucleic Acids Res. 49(19):10931-10955." +
+                          "Developed by Zhe Liu in Janelia Research Campus")
+        citaText.setFont(QFont("Arial", 12))
+        citaText.setWordWrap(True)
 
         self.home_tab.layout.addWidget(welcomeText)
         self.home_tab.layout.addWidget(aboutLabel)
@@ -1452,10 +1840,19 @@ class WidgetGallery(QDialog):
         self.home_tab.layout.addWidget(gsText)
         self.home_tab.layout.addWidget(gicLabel)
         self.home_tab.layout.addWidget(gicText)
+        self.home_tab.layout.addWidget(citaLabel)
+        self.home_tab.layout.addWidget(citaText)
 
         # Trajectory tab
-        self.trajectory_tab.layout = QGridLayout(self)
-        self.trajectory_tab.setLayout(self.trajectory_tab.layout)
+        self.trajectoryPlotTab = QWidget()
+        self.trajectoryDataTab = QWidget()
+
+        self.trajectory_tab.addTab(self.trajectoryPlotTab, "&Plot")
+        self.trajectory_tab.addTab(self.trajectoryDataTab, "Detai&ls")
+
+        # Trajectory plot sub tab
+        self.trajectoryPlotTab.layout = QGridLayout(self)
+        self.trajectoryPlotTab.setLayout(self.trajectoryPlotTab.layout)
 
         self.trajectory_browser = QtWebEngineWidgets.QWebEngineView(self)
 
@@ -1474,22 +1871,34 @@ class WidgetGallery(QDialog):
         self.minTrajLength = QSpinBox()
         self.minTrajLength.setValue(5)
 
-        # trajectoryGrouping = QLabel()
-        # trajectoryGrouping.setText("Group Trajectory By:")
-        # self.trajTabTrajGroupButton = QRadioButton("Trajectory")
-        # self.trajTabSpeedGroupButton = QRadioButton("Speed")
-        # self.trajTabTrajGroupButton.setChecked(True)
+        trajectoryGrouping = QLabel()
+        trajectoryGrouping.setText("Group Trajectory By:")
+        self.trajTabTrajGroupButton = QRadioButton("Trajectory")
+        self.trajTabSpeedGroupButton = QRadioButton("Speed")
+        self.trajTabTrajGroupButton.setChecked(True)
 
-        self.trajectory_tab.layout.addWidget(trajNumber, 0, 0, 1, 1)
-        self.trajectory_tab.layout.addWidget(self.trajNumberBox, 1, 0, 1, 1)
-        self.trajectory_tab.layout.addWidget(jumpNumberDraw, 2, 0, 1, 1)
-        self.trajectory_tab.layout.addWidget(self.jumpNumberDrawBox, 3, 0, 1, 1)
-        self.trajectory_tab.layout.addWidget(minTrajLength, 4, 0, 1, 1)
-        self.trajectory_tab.layout.addWidget(self.minTrajLength, 5, 0, 1, 1)
+        self.trajectoryPlotTab.layout.addWidget(trajNumber, 0, 0, 1, 1)
+        self.trajectoryPlotTab.layout.addWidget(self.trajNumberBox, 1, 0, 1, 1)
+        self.trajectoryPlotTab.layout.addWidget(jumpNumberDraw, 2, 0, 1, 1)
+        self.trajectoryPlotTab.layout.addWidget(self.jumpNumberDrawBox, 3, 0, 1, 1)
+        self.trajectoryPlotTab.layout.addWidget(minTrajLength, 4, 0, 1, 1)
+        self.trajectoryPlotTab.layout.addWidget(self.minTrajLength, 5, 0, 1, 1)
         # self.trajectory_tab.layout.addWidget(trajectoryGrouping, 6, 0)
         # self.trajectory_tab.layout.addWidget(self.trajTabTrajGroupButton, 7, 0)
         # self.trajectory_tab.layout.addWidget(self.trajTabSpeedGroupButton, 8, 0)
-        self.trajectory_tab.layout.addWidget(self.trajectory_browser, 0, 1, 10, 3)
+        self.trajectoryPlotTab.layout.addWidget(self.trajectory_browser, 0, 1, 10, 3)
+
+        self.trajectoryPlotTab.layout.setColumnStretch(0, 5)
+        self.trajectoryPlotTab.layout.setColumnStretch(1, 1)
+        self.trajectoryPlotTab.layout.setColumnStretch(2, 2)
+
+        # Trajectory data tab
+        self.trajectoryDataTab.layout = QGridLayout(self)
+        self.trajectoryDataTab.setLayout(self.trajectoryDataTab.layout)
+
+        self.trajectoryNumberBox_browser = QtWebEngineWidgets.QWebEngineView(self)
+
+        self.trajectoryDataTab.layout.addWidget(self.trajectoryNumberBox_browser, 0, 0, 1, 1)
 
         # Diffusion tab
         self.diffusionTrajectoryTab = QWidget()
@@ -1538,6 +1947,8 @@ class WidgetGallery(QDialog):
         self.diffusionErrorSEM = QRadioButton("Standard Error of Mean")
         self.diffusionErrorSTD.setChecked(True)
 
+        self.fractionExportButton = QPushButton("Boundary Export")
+
         self.diffusion_browser = QtWebEngineWidgets.QWebEngineView(self)
         self.diffusionFraction1_browser = QtWebEngineWidgets.QWebEngineView(self)
         self.diffusionFraction2_browser = QtWebEngineWidgets.QWebEngineView(self)
@@ -1556,6 +1967,7 @@ class WidgetGallery(QDialog):
         self.diffusionTrajectoryTabLeftSideBar.addWidget(self.diffusionErrorVariation)
         self.diffusionTrajectoryTabLeftSideBar.addWidget(self.diffusionErrorSTD)
         self.diffusionTrajectoryTabLeftSideBar.addWidget(self.diffusionErrorSEM)
+        self.diffusionTrajectoryTabLeftSideBar.addWidget(self.fractionExportButton)
         self.diffusionTrajectoryTabPlots.addWidget(self.diffusion_browser, 0, 0, 3, 3)
         self.diffusionTrajectoryTabPlots.addWidget(self.diffusionFraction1_browser, 0, 4, 1, 1)
         self.diffusionTrajectoryTabPlots.addWidget(self.diffusionFraction2_browser, 1, 4, 1, 1)
@@ -1658,9 +2070,48 @@ class WidgetGallery(QDialog):
         self.diffusionTrackTab.layout.addWidget(jumpDistanceLabel, 30, 2, 1, 2)
         self.diffusionTrackTab.layout.addWidget(self.jumpDistanceConsidered, 30, 4, 1, 2)
 
-        self.trajectory_tab.layout.setColumnStretch(0, 5)
-        self.trajectory_tab.layout.setColumnStretch(1, 1)
-        self.trajectory_tab.layout.setColumnStretch(2, 2)
+        # Angle tab
+        self.trackAngleTab.layout = QGridLayout(self)
+        self.trackAngleTab.setLayout(self.trackAngleTab.layout)
+        self.trackAngleMut_browser = QtWebEngineWidgets.QWebEngineView(self)
+        self.trackAngleState_browser = QtWebEngineWidgets.QWebEngineView(self)
+        self.trackAngleBound_browser = QtWebEngineWidgets.QWebEngineView(self)
+        self.trackAngleDiffu_browser = QtWebEngineWidgets.QWebEngineView(self)
+        self.trackAngleBox_browser = QtWebEngineWidgets.QWebEngineView(self)
+
+        self.angleGroupBox = QGroupBox("Angle Parameters")
+
+        angleSelectionText = QLabel()
+        angleSelectionText.setText("Angles of Interest:")
+        self.angleSelection = CheckableComboBox()
+        angleRatioText = QLabel()
+        angleRatioText.setText("Ratio:")
+        self.angleRatio = QDoubleSpinBox()
+        self.angleRatio.setMaximum(100)
+        self.angleRatio.setMinimum(0)
+        self.angleRatio.setValue(50)
+
+        angleGroupBoxLayout = QVBoxLayout()
+        angleGroupBoxLayout.addWidget(angleSelectionText)
+        angleGroupBoxLayout.addWidget(self.angleSelection)
+        angleGroupBoxLayout.addWidget(angleRatioText)
+        angleGroupBoxLayout.addWidget(self.angleRatio)
+        self.angleGroupBox.setLayout(angleGroupBoxLayout)  
+
+        boundaryValueText = QLabel()
+        boundaryValueText.setText("Boundary Computation:")
+        self.boundaryValueAngle = QDoubleSpinBox()
+        self.boundaryValueAngle.setMinimum(-99.99)
+        self.boundaryValueAngle.setValue(-0.5)
+
+        self.trackAngleTab.layout.addWidget(self.trackAngleMut_browser, 0, 0, 1, 1)
+        self.trackAngleTab.layout.addWidget(self.trackAngleState_browser, 1, 0, 1, 1)
+        self.trackAngleTab.layout.addWidget(self.trackAngleBound_browser, 0, 1, 1, 1)
+        self.trackAngleTab.layout.addWidget(self.trackAngleDiffu_browser, 1, 1, 1, 1)
+        self.trackAngleTab.layout.addWidget(self.trackAngleBox_browser, 0, 2, 1, 1)
+        self.trackAngleTab.layout.addWidget(self.angleGroupBox, 1, 2, 1, 1)
+        self.trackAngleTab.layout.addWidget(boundaryValueText, 2, 0, 1, 1)
+        self.trackAngleTab.layout.addWidget(self.boundaryValueAngle, 2, 1, 1, 2)
 
         # Trajectory characteristics tab
         self.trajCharLifetimeTab = QWidget()
@@ -1889,7 +2340,9 @@ class WidgetGallery(QDialog):
         diffusionConstantMax = QLabel()
         diffusionConstantMax.setText("Maximum Expected Diffusion Constant::")
         diffusionConstantMax.setToolTip("The maximal expected diffusion constant caused by Brownian motion in um^2/s.")
-        self.diffusionConstantMaxBox = QSpinBox()
+        self.diffusionConstantMaxBox = QDoubleSpinBox()
+        self.diffusionConstantMaxBox.setMaximum(10)
+        self.diffusionConstantMaxBox.setMinimum(0)
         self.diffusionConstantMaxBox.setValue(3)
 
         gapsAllowed = QLabel()
